@@ -26,6 +26,7 @@ class SourceType(str, Enum):
 class OutputType(str, Enum):
     text = "text"
     json = "json"
+    markdown = "markdown"
     both = "both"
 
 
@@ -44,6 +45,7 @@ def build_filters(
     hosts: Optional[str],
     database: Optional[str],
     source: SourceType,
+    file_like: Optional[str] = None,
 ) -> QueryFilters:
     log_ids = parse_csv(log_id)
     if source == SourceType.click and not log_ids:
@@ -57,6 +59,12 @@ def build_filters(
     if t_from and t_to and t_from >= t_to:
         raise typer.BadParameter("--from must be earlier than --to")
 
+    pattern = (file_like or "").strip() or None
+    if pattern and source != SourceType.click:
+        raise typer.BadParameter(
+            "--file-like applies only to --source click (ClickHouse file column)"
+        )
+
     return QueryFilters(
         log_ids=log_ids,
         time_from=t_from,
@@ -64,6 +72,7 @@ def build_filters(
         min_duration_us=int(min_duration * 1_000_000),
         hosts=parse_csv(hosts),
         process_name=database,
+        file_like=pattern,
     )
 
 
@@ -161,6 +170,29 @@ def build_file_source(
     return load_json_file(file, victim_event=victim_event)
 
 
+def print_victim_analysis_output(
+    console,
+    result,
+    output: OutputType,
+    *,
+    render_json,
+    render_text,
+    render_markdown,
+    labels,
+) -> None:
+    """Print TLOCK/TTIMEOUT analysis in requested formats."""
+    if output in (OutputType.json, OutputType.both):
+        console.print(render_json(result, labels=labels))
+    if output in (OutputType.markdown, OutputType.both):
+        if output == OutputType.both:
+            console.print("\n" + "=" * 40 + " MARKDOWN " + "=" * 40 + "\n")
+        console.print(render_markdown(result, labels=labels))
+    if output in (OutputType.text, OutputType.both):
+        if output == OutputType.both:
+            console.print("\n" + "=" * 40 + " TEXT " + "=" * 40 + "\n")
+        console.print(render_text(result, labels=labels))
+
+
 def format_filter_summary(filters: QueryFilters, source: SourceType) -> str:
     parts = [f"Source={source.value}"]
     if filters.log_ids:
@@ -175,6 +207,8 @@ def format_filter_summary(filters: QueryFilters, source: SourceType) -> str:
         parts.append(f"hosts={','.join(filters.hosts)}")
     if filters.process_name:
         parts.append(f"database={filters.process_name}")
+    if filters.file_like:
+        parts.append(f"file_like={filters.file_like}")
     parts.append(f"min_duration={filters.min_duration_us / 1_000_000}s")
     return " ".join(parts)
 

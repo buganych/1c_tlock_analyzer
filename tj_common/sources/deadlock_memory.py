@@ -107,7 +107,7 @@ class DeadlockMemorySource(DeadlockDataSource):
             waits.append(
                 ParticipantWait(
                     ts=e.ts,
-                    ts_str=e.ts.isoformat(),
+                    ts_str=e.ts.strftime("%Y-%m-%d %H:%M:%S.%f"),
                     connect_id=e.connect_id,
                     context=e.context,
                     locks=e.locks,

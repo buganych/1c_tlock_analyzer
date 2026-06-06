@@ -24,6 +24,18 @@ class LogSource(ABC):
     ) -> TransactionBounds:
         ...
 
+    def fetch_timeout_wait_tlock(
+        self,
+        victim: TjEvent,
+        log_id: str | None = None,
+        hosts: list[str] | None = None,
+        timeout_sec: float = 20.0,
+        duration_tolerance_sec: float = 2.0,
+        ts_window_sec: float = 1.0,
+    ) -> TjEvent | None:
+        """TLOCK on victim connection with duration close to lock wait timeout."""
+        return None
+
     @abstractmethod
     def fetch_culprit_tlocks(
         self,
@@ -46,4 +58,15 @@ class LogSource(ABC):
         log_id: str | None = None,
         hosts: list[str] | None = None,
     ) -> str:
+        ...
+
+    @abstractmethod
+    def fetch_transaction_context(
+        self,
+        connect_id: str,
+        at_ts: datetime,
+        log_id: str | None = None,
+        hosts: list[str] | None = None,
+    ) -> str:
+        """Context at SDBL row timestamp (begin/commit), else nearest Context event."""
         ...

@@ -17,6 +17,7 @@ class QueryFilters:
     min_duration_us: int = 0
     hosts: list[str] | None = None
     process_name: str | None = None
+    file_like: str | None = None  # ClickHouse: file LIKE pattern, e.g. %tlock_1607235%
 
     def matches_log_id(self, log_id: str) -> bool:
         if not self.log_ids:
@@ -72,6 +73,26 @@ class TransactionBounds:
 
 
 @dataclass
+class TxBoundary:
+    """Transaction begin/end marker with context (when conflict not found)."""
+
+    timestamp: datetime | None = None
+    context: str = ""
+
+
+@dataclass
+class CulpritTlockRow:
+    """One TLOCK in culprit transaction for report."""
+
+    timestamp: datetime
+    duration_sec: float
+    regions: str
+    locks: str = ""
+    context: str = ""
+    conflict_type: str = ""
+
+
+@dataclass
 class CulpritAnalysis:
     connect_id: str
     tx_start: datetime | None = None
@@ -83,6 +104,10 @@ class CulpritAnalysis:
     different_dimensions: list[dict[str, Any]] = field(default_factory=list)
     big_transaction: list[dict[str, Any]] = field(default_factory=list)
     transaction_events: str = ""
+    tx_start_boundary: TxBoundary | None = None
+    tx_end_boundary: TxBoundary | None = None
+    tx_tlocks_conflict: list[CulpritTlockRow] = field(default_factory=list)
+    tx_tlocks_all: list[CulpritTlockRow] = field(default_factory=list)
 
 
 @dataclass

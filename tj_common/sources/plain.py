@@ -9,13 +9,40 @@ from pathlib import Path
 from tj_common.models import TjEvent
 from tj_common.sources.memory import MemoryLogSource
 
-# 28:34.123012-1234567,TLOCK,2,...
+# 28:34.123012-1234567,TLOCK,2,...  (MM:SS.micro within hour from log file name)
+# 10:54:35.123456-...               (HH:MM:SS.micro, full clock time)
 EVENT_LINE_RE = re.compile(
-    r"^(\d{2}:\d{2}:\d{2}\.\d+)-(\d+),(\w+),(\d+),(.*)$"
+    r"^(\d{2}:\d{2}(?::\d{2})?\.\d+)-(\d+),(\w+),(\d+),(.*)$"
 )
 KV_RE = re.compile(r"^(\w+)=([\s\S]*)$")
 
 RELEVANT_EVENTS = {"TLOCK", "TTIMEOUT", "TDEADLOCK", "SDBL", "Context"}
+
+
+def _normalize_prop_key(key: str) -> str:
+    """Map TJ plain keys like t:connectID -> tconnectID."""
+    if key.startswith("t:"):
+        return "t" + key[2:]
+    if key.startswith("p:"):
+        return "p" + key[2:]
+    return key
+
+
+def _parse_time_part(time_part: str, base_date: datetime) -> datetime:
+    parts = time_part.split(":")
+    sec, _, micro = parts[-1].partition(".")
+    micro_val = int(micro.ljust(6, "0")[:6])
+    if len(parts) == 3:
+        hour, minute = int(parts[0]), int(parts[1])
+    else:
+        hour = base_date.hour
+        minute = int(parts[0])
+    return base_date.replace(
+        hour=hour,
+        minute=minute,
+        second=int(sec),
+        microsecond=micro_val,
+    )
 
 
 def _parse_kv_props(lines: list[str], start_idx: int) -> tuple[dict[str, str], int]:
@@ -79,6 +106,7 @@ def _map_props(props: dict[str, str], event_name: str) -> TjEvent:
         locks=str(props.get("Locks") or props.get("locks") or "").replace("'", ""),
         duration_us=duration,
         host=props.get("agent.hostname")
+        or props.get("tcomputerName")
         or props.get("Host")
         or props.get("computer_name")
         or "",
@@ -105,6 +133,7 @@ def parse_plain_content(
     if base_date is None:
         base_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
+    content = content.lstrip("\ufeff")
     lines = content.splitlines()
     events: list[TjEvent] = []
     i = 0
@@ -118,21 +147,14 @@ def parse_plain_content(
             i += 1
             continue
 
-        h, mi, rest = time_part.split(":")
-        sec, _, micro = rest.partition(".")
-        ts = base_date.replace(
-            hour=int(h),
-            minute=int(mi),
-            second=int(sec),
-            microsecond=int(micro.ljust(6, "0")[:6]),
-        )
+        ts = _parse_time_part(time_part, base_date)
 
         props: dict[str, str] = {"Duration": duration_str}
         for part in tail.split(","):
             part = part.strip()
             if "=" in part:
                 k, _, v = part.partition("=")
-                props[k.strip()] = v.strip()
+                props[_normalize_prop_key(k.strip())] = v.strip()
 
         extra_props, next_i = _parse_kv_props(lines, i + 1)
         props.update(extra_props)
@@ -152,7 +174,7 @@ def load_plain_file(
     base_date: datetime | None = None,
     victim_event: str = "TLOCK",
 ) -> MemoryLogSource:
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     return MemoryLogSource(
         parse_plain_content(text, base_date), victim_event=victim_event
     )

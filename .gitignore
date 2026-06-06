@@ -1,4 +1,6 @@
 bmp/
+reports/
+test_tlocks2/
 
 # Secrets (ClickHouse, Grafana tokens)
 .cursor/mcp.json

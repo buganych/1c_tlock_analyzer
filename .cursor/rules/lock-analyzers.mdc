@@ -42,6 +42,7 @@ alwaysApply: true
 | `--log-id` | **Обязателен** для click; можно через запятую |
 | `--database` | Фильтр `process_name` (AND); важно для TDEADLOCK |
 | `--from` / `--to` | Период (опционально) |
+| `--file-like` | ClickHouse: `file LIKE` (опционально), напр. `%tlock_1607235%` — только отбор жертв |
 | `--hosts` | Хосты (опционально) |
 | `--min-duration` | Мин. длительность ожидания, сек (TLOCK/TTIMEOUT) |
 | `--output both` | JSON + текст (рекомендуется) |

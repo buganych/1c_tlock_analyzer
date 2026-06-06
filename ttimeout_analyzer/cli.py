@@ -15,9 +15,12 @@ from tj_common.cli_shared import (
     build_file_source,
     build_filters,
     format_filter_summary,
+    print_victim_analysis_output,
 )
+from tj_common.utils import apply_mcp_clickhouse_env
 from tj_common.report.json_out import render_json as _render_json
 from tj_common.report.labels import TTIMEOUT_LABELS
+from tj_common.report.markdown import render_markdown as _render_markdown
 from tj_common.report.text import render_text as _render_text
 
 app = typer.Typer(
@@ -50,6 +53,11 @@ def main(
     database: Optional[str] = typer.Option(
         None, "--database", help="Optional ProcessName / IB filter"
     ),
+    file_like: Optional[str] = typer.Option(
+        None,
+        "--file-like",
+        help="ClickHouse only: optional file LIKE pattern, e.g. %tlock_1607235%",
+    ),
     file: Optional[str] = typer.Option(None, help="Path to TJ file (plain/json)"),
     base_date: Optional[str] = typer.Option(
         None, help="Base date for plain TJ (time-only lines)"
@@ -65,8 +73,10 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
+    apply_mcp_clickhouse_env()
+
     filters = build_filters(
-        log_id, time_from, time_to, min_duration, hosts, database, source
+        log_id, time_from, time_to, min_duration, hosts, database, source, file_like
     )
 
     if source == SourceType.click:
@@ -92,12 +102,15 @@ def main(
     if result.errors:
         console.print(f"[yellow]Errors: {len(result.errors)}[/yellow]")
 
-    if output in (OutputType.json, OutputType.both):
-        console.print(_render_json(result, labels=TTIMEOUT_LABELS))
-    if output in (OutputType.text, OutputType.both):
-        if output == OutputType.both:
-            console.print("\n" + "=" * 40 + " TEXT REPORT " + "=" * 40 + "\n")
-        console.print(_render_text(result, labels=TTIMEOUT_LABELS))
+    print_victim_analysis_output(
+        console,
+        result,
+        output,
+        render_json=_render_json,
+        render_text=_render_text,
+        render_markdown=_render_markdown,
+        labels=TTIMEOUT_LABELS,
+    )
 
 
 def app_entry():

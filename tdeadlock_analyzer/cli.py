@@ -21,6 +21,7 @@ from tj_common.sources.deadlock_plain import (
     load_deadlock_json_file,
     load_deadlock_plain_file,
 )
+from tj_common.utils import apply_mcp_clickhouse_env
 
 app = typer.Typer(help="Analyze 1C TDEADLOCK events and build deadlock graphs")
 console = Console()
@@ -66,6 +67,8 @@ def main(
     """Analyze TDEADLOCK cases from ClickHouse or TJ files."""
     if ctx.invoked_subcommand is not None:
         return
+
+    apply_mcp_clickhouse_env()
 
     filters = build_deadlock_filters(
         log_id,

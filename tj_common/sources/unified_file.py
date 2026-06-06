@@ -16,7 +16,7 @@ from tj_common.sources.plain import parse_plain_content
 def load_unified_plain_file(
     path: str | Path, base_date: datetime | None = None
 ) -> tuple[MemoryLogSource, MemoryLogSource, DeadlockMemorySource]:
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     events = parse_plain_content(text, base_date)
     return _sources_from_events(events)
 

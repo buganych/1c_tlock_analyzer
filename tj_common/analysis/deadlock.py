@@ -259,22 +259,33 @@ def add_tx_events(case: DeadlockCase, participant: Participant, role: str, end_l
         )
 
 
+def _timeline_event_time(ev: TimelineEvent) -> datetime:
+    if ev.wait and ev.wait.ts:
+        ts = ev.wait.ts
+        return ts.replace(tzinfo=None) if ts.tzinfo else ts
+    raw = ev.time.strip()
+    return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+
+
+def _timeline_event_order(ev: TimelineEvent) -> int:
+    if ev.label in ("Начало транзакции", "BeginTransaction"):
+        return 0
+    if not ev.is_wait and ev.event_id:
+        return 1
+    if ev.is_wait:
+        return 2
+    if ev.label in ("Откат транзакции", "RollbackTransaction"):
+        return 3
+    if ev.label in ("Фиксация транзакции", "CommitTransaction"):
+        return 4
+    return 5
+
+
 def sort_timeline(events: list[TimelineEvent]) -> list[TimelineEvent]:
     """Port of УпорядочитьСобытияВзаимоблокировки."""
 
-    def order_key(ev: TimelineEvent) -> tuple[str, int]:
-        order = 5
-        if ev.label in ("Начало транзакции", "BeginTransaction"):
-            order = 0
-        elif not ev.is_wait and ev.event_id:
-            order = 1
-        elif ev.is_wait:
-            order = 2
-        elif ev.label in ("Откат транзакции", "RollbackTransaction"):
-            order = 3
-        elif ev.label in ("Фиксация транзакции", "CommitTransaction"):
-            order = 4
-        return (ev.time, order)
+    def order_key(ev: TimelineEvent) -> tuple[datetime, int]:
+        return (_timeline_event_time(ev), _timeline_event_order(ev))
 
     return sorted(events, key=order_key)
 
@@ -288,6 +299,10 @@ def classify_deadlock_type(victim: Participant) -> str:
         if w.level == "Exclusive":
             had_exclusive = True
     return DEADLOCK_TYPE_ORDER
+
+
+def _participant_column_title(participant: Participant) -> str:
+    return participant.role or f"connect {participant.connect_id}"
 
 
 def build_cross_matrix(case: DeadlockCase) -> str:
@@ -309,7 +324,13 @@ def build_cross_matrix(case: DeadlockCase) -> str:
         cells = [cell(p, w) for w in p.waits[:5]] or ["_?_"]
         col_widths.append(max(len(c) for c in cells))
 
-    header = "|" + "|".join(f"{'_' + p.role[:12] + '_':^{w}}" for p, w in zip(participants, col_widths)) + "|"
+    header = (
+        "|"
+        + "|".join(
+            f"{_participant_column_title(p):^{w}}" for p, w in zip(participants, col_widths)
+        )
+        + "|"
+    )
     rows.append(header)
     sep = "|" + "|".join("_" * w for w in col_widths) + "|"
 

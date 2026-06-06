@@ -26,6 +26,7 @@ from tj_common.sources.unified_file import (
     load_unified_json_file,
     load_unified_plain_file,
 )
+from tj_common.utils import apply_mcp_clickhouse_env
 
 app = typer.Typer(
     help="Analyze all 1C lock problems: TLOCK waits, TTIMEOUT, TDEADLOCK (one command)"
@@ -65,6 +66,11 @@ def main(
     database: Optional[str] = typer.Option(
         None, "--database", help="ProcessName filter (AND with log_id)"
     ),
+    file_like: Optional[str] = typer.Option(
+        None,
+        "--file-like",
+        help="ClickHouse only: optional file LIKE pattern, e.g. %tlock_1607235%",
+    ),
     file: Optional[str] = typer.Option(None, help="TJ file for plain/json"),
     base_date: Optional[str] = typer.Option(None, help="Base date for plain TJ"),
     only: Optional[str] = typer.Option(
@@ -92,9 +98,11 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
+    apply_mcp_clickhouse_env()
+
     kinds = _parse_only(only)
     tlock_filters = build_filters(
-        log_id, time_from, time_to, min_duration, hosts, database, source
+        log_id, time_from, time_to, min_duration, hosts, database, source, file_like
     )
     ttimeout_filters = tlock_filters
     tdeadlock_filters = build_deadlock_filters(

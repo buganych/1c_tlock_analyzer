@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import clickhouse_connect
 
 from tj_common.models import QueryFilters, TjEvent, TransactionBounds
 from tj_common.sources.base import LogSource
-from tj_common.utils import host_variants
+from tj_common.utils import host_variants, pick_timeout_wait_tlock
 
 
 def _parse_ts(value: Any) -> datetime:
@@ -105,6 +105,13 @@ class ClickHouseSource(LogSource):
         params = {f"lid{i}": v for i, v in enumerate(log_ids)}
         return f"{column} IN ({placeholders})", params
 
+    def _file_like_clause(
+        self, file_like: str | None, column: str = "file"
+    ) -> tuple[str, dict]:
+        if not file_like:
+            return "1=1", {}
+        return f"{column} LIKE {{file_like:String}}", {"file_like": file_like}
+
     def _time_clause(
         self, time_from: datetime | None, time_to: datetime | None, column: str = "ts"
     ) -> tuple[str, dict[str, datetime], bool]:
@@ -138,6 +145,7 @@ class ClickHouseSource(LogSource):
     def fetch_victims(self, filters: QueryFilters) -> list[TjEvent]:
         host_sql, host_params = self._host_clause(filters.hosts)
         log_sql, log_params = self._log_id_clause(filters.log_ids)
+        file_sql, file_params = self._file_like_clause(filters.file_like)
         time_sql, time_params, use_time = self._time_clause(
             filters.time_from, filters.time_to
         )
@@ -149,12 +157,14 @@ class ClickHouseSource(LogSource):
               AND duration >= {{min_duration:UInt64}}
               AND {log_sql}
               AND {host_sql}
+              AND {file_sql}
               AND {time_sql}
         """
         params: dict[str, Any] = {
             "min_duration": filters.min_duration_us,
             **host_params,
             **log_params,
+            **file_params,
         }
         if filters.process_name:
             sql += " AND lower(process_name) = lower({process_name:String})"
@@ -186,24 +196,31 @@ class ClickHouseSource(LogSource):
             cmp = "ts > toDateTime64({reference_ts:String}, 6)"
             order = "ORDER BY ts ASC"
 
-        funcs = (
-            ("BeginTransaction",)
-            if func == "begin"
-            else ("CommitTransaction", "RollbackTransaction")
-        )
-        func_placeholders = ", ".join(f"{{func{i}:String}}" for i in range(len(funcs)))
+        if func == "begin":
+            func_filter = "func = {func0:String}"
+            func_params = {"func0": "BeginTransaction"}
+        else:
+            func_filter = (
+                "(func IN ({func0:String}, {func1:String}) "
+                "OR func LIKE '%CommitTransaction%' "
+                "OR func LIKE '%RollbackTransaction%')"
+            )
+            func_params = {
+                "func0": "CommitTransaction",
+                "func1": "RollbackTransaction",
+            }
         params: dict[str, Any] = {
             "reference_ts": self._ts_literal(reference_ts),
             "connect_id": connect_id,
             **host_params,
             **log_params,
-            **{f"func{i}": f for i, f in enumerate(funcs)},
+            **func_params,
         }
 
         sql = f"""
             SELECT ts FROM {self.database}.tj_sdbl
             WHERE connect_id = {{connect_id:String}}
-              AND func IN ({func_placeholders})
+              AND {func_filter}
               AND {cmp}
               AND {host_sql}
               AND {log_sql}
@@ -214,11 +231,19 @@ class ClickHouseSource(LogSource):
         if rows:
             return _parse_ts(rows[0]["ts"])
 
+        if func == "begin":
+            raw_func_filter = "extra['func'] = {func0:String}"
+        else:
+            raw_func_filter = (
+                "(extra['func'] IN ({func0:String}, {func1:String}) "
+                "OR toString(extra['func']) LIKE '%CommitTransaction%' "
+                "OR toString(extra['func']) LIKE '%RollbackTransaction%')"
+            )
         sql_raw = f"""
             SELECT ts FROM {self.database}.tj_raw
             WHERE name = 'SDBL'
               AND connect_id = {{connect_id:String}}
-              AND extra['func'] IN ({func_placeholders})
+              AND {raw_func_filter}
               AND {cmp}
               AND {host_sql}
               AND {log_sql}
@@ -229,6 +254,61 @@ class ClickHouseSource(LogSource):
         if rows:
             return _parse_ts(rows[0]["ts"])
         return None
+
+    def fetch_timeout_wait_tlock(
+        self,
+        victim: TjEvent,
+        log_id: str | None = None,
+        hosts: list[str] | None = None,
+        timeout_sec: float = 20.0,
+        duration_tolerance_sec: float = 2.0,
+        ts_window_sec: float = 1.0,
+    ) -> TjEvent | None:
+        host_sql, host_params = self._host_clause(hosts)
+        log_sql, log_params = self._log_id_clause(
+            [log_id or victim.log_id] if (log_id or victim.log_id) else None
+        )
+        min_dur = int(max(0.0, timeout_sec - duration_tolerance_sec) * 1_000_000)
+        max_dur = int((timeout_sec + duration_tolerance_sec) * 1_000_000)
+        sql = f"""
+            SELECT log_id, ts, connect_id, wait_connections, regions, locks, duration,
+                   computer_name, process_name, usr, context, escalating, application_name
+            FROM {self.database}.tj_tlock
+            WHERE connect_id = {{connect_id:String}}
+              AND wait_connections = {{wait_connections:String}}
+              AND duration >= {{min_duration:UInt64}}
+              AND duration <= {{max_duration:UInt64}}
+              AND ts >= {{ts_from:DateTime64(6)}}
+              AND ts <= {{ts_to:DateTime64(6)}}
+              AND {host_sql}
+              AND {log_sql}
+            ORDER BY abs(duration - {{target_duration:UInt64}}) ASC, ts ASC
+            LIMIT 20
+        """
+        ts_from = victim.ts - timedelta(seconds=ts_window_sec)
+        ts_to = victim.ts + timedelta(seconds=ts_window_sec)
+        params: dict[str, Any] = {
+            "connect_id": victim.connect_id,
+            "wait_connections": victim.wait_connections,
+            "min_duration": min_dur,
+            "max_duration": max_dur,
+            "target_duration": int(timeout_sec * 1_000_000),
+            **host_params,
+            **log_params,
+        }
+        rows = self._query_ts(
+            sql,
+            time_params={"ts_from": ts_from, "ts_to": ts_to},
+            params=params,
+        )
+        candidates = [_row_to_victim(r, "TLOCK") for r in rows]
+        return pick_timeout_wait_tlock(
+            candidates,
+            victim,
+            timeout_sec=timeout_sec,
+            duration_tolerance_sec=duration_tolerance_sec,
+            ts_window_sec=ts_window_sec,
+        )
 
     def find_transaction_bounds(
         self,
@@ -279,7 +359,11 @@ class ClickHouseSource(LogSource):
     ) -> list[TjEvent]:
         host_sql, host_params = self._host_clause(hosts)
         log_sql, log_params = self._log_id_clause([log_id] if log_id else None)
-        region_sql, region_params = self._region_clause(region_filter)
+        region_sql, region_params = (
+            self._region_clause(region_filter)
+            if region_filter.strip()
+            else ("1=1", {})
+        )
         sql = f"""
             SELECT log_id, ts, connect_id, wait_connections, regions, locks, duration,
                    computer_name, process_name, usr, context, escalating, application_name
@@ -336,3 +420,31 @@ class ClickHouseSource(LogSource):
         if rows and rows[0].get("context"):
             return str(rows[0]["context"])
         return ""
+
+    def fetch_transaction_context(
+        self,
+        connect_id: str,
+        at_ts: datetime,
+        log_id: str | None = None,
+        hosts: list[str] | None = None,
+    ) -> str:
+        host_sql, host_params = self._host_clause(hosts)
+        log_sql, log_params = self._log_id_clause([log_id] if log_id else None)
+        sql = f"""
+            SELECT context FROM {self.database}.tj_sdbl
+            WHERE connect_id = {{connect_id:String}}
+              AND ts = toDateTime64({{at_ts:String}}, 6)
+              AND {host_sql}
+              AND {log_sql}
+            LIMIT 1
+        """
+        params = {
+            "connect_id": connect_id,
+            "at_ts": self._ts_literal(at_ts),
+            **host_params,
+            **log_params,
+        }
+        rows = self._query(sql, params)
+        if rows and rows[0].get("context"):
+            return str(rows[0]["context"])
+        return self.fetch_context(connect_id, at_ts, log_id=log_id, hosts=hosts)

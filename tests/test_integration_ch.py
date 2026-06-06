@@ -11,15 +11,18 @@ from tlock_analyzer.sources.clickhouse import ClickHouseSource
 
 @pytest.mark.integration
 def test_clickhouse_victims_by_log_id():
-    password = os.environ.get("CLICKHOUSE_PASSWORD")
-    if not password:
-        pytest.skip("CLICKHOUSE_PASSWORD not set")
+    from tj_common.utils import apply_mcp_clickhouse_env, clickhouse_config_from_env
+
+    apply_mcp_clickhouse_env()
+    cfg = clickhouse_config_from_env()
+    if not cfg["password"]:
+        pytest.skip("CLICKHOUSE_PASSWORD not set (env or .cursor/mcp.json)")
 
     ch = ClickHouseSource(
-        host=os.environ.get("CLICKHOUSE_HOST", "192.168.40.51"),
-        port=int(os.environ.get("CLICKHOUSE_PORT", "18123")),
-        password=password,
-        database=os.environ.get("CLICKHOUSE_DATABASE", "onec_logs"),
+        host=cfg["host"],
+        port=cfg["port"],
+        password=cfg["password"],
+        database=cfg["database"],
     )
 
     log_ids = os.environ.get("CLICKHOUSE_TEST_LOG_ID", "teletrade_tj_logs").split(",")

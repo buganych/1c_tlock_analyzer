@@ -1,52 +1,138 @@
-"""Human-readable report (ЗаполнитьСводнаяИнформацияClick style)."""
+"""Human-readable report — same structure as markdown, plain text."""
 
 from __future__ import annotations
 
-from tj_common.models import AnalysisResult, CulpritAnalysis
+from tj_common.models import AnalysisResult, CulpritAnalysis, CulpritTlockRow
+from tj_common.report.event_report import (
+    _conflict_tlock_rows,
+    _tx_duration_sec,
+    _victim_table_rows,
+    normalize_context,
+)
 from tj_common.report.labels import ReportLabels, TLOCK_LABELS
 from tj_common.utils import format_ts
 
-SECTION_FULL = "ПОЛНОЕ СООТВЕТСТВИЕ"
-SECTION_ESC = "ЭСКАЛАЦИЯ"
-SECTION_DIFF = "РАЗНЫЙ НАБОР ИЗМЕРЕНИЙ"
-SECTION_BIG = "БОЛЬШАЯ ТРАНЗАКЦИЯ"
+
+def _plain_table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(str(cell)))
+    sep = " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers))
+    lines = [sep, "-+-".join("-" * w for w in widths)]
+    for row in rows:
+        lines.append(" | ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
+    return lines
 
 
-def _tx_interval(c: CulpritAnalysis) -> str:
-    if not c.tx_start or not c.tx_end:
-        return "—"
-    dur = ""
-    if c.tx_duration_us:
-        dur = f" ({c.tx_duration_us / 1_000_000:.2f} сек.)"
-    return (
-        f"{format_ts(c.tx_start)} — {format_ts(c.tx_end)}{dur}"
-    )
+def _plain_tlock_context_sections(rows: list[CulpritTlockRow]) -> list[str]:
+    lines: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        body = normalize_context(row.context)
+        if not body:
+            continue
+        key = (format_ts(row.timestamp), body)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.extend(_plain_context(f"Контекст TLOCK {format_ts(row.timestamp)}", body))
+    return lines
 
 
-def _format_conflict_block(title: str, items: list[dict]) -> list[str]:
-    lines = [f"--- {title} ---"]
-    template = (
-        "Пространство = {Regions}\n"
-        "Блокировка = {Locks}\n"
-        "Длительность(сек) = {dur}\n"
-        "timestamp = {ts}\n"
-        "Пользователь = {Usr}\n"
-        "Номер соединения = {ConnectID}\n"
-        "Контекст = {Context}"
-    )
-    for d in items:
-        dur = float(d.get("Duration", 0) or 0) / 1_000_000
-        lines.append(
-            template.format(
-                Regions=d.get("Regions", ""),
-                Locks=str(d.get("Locks", "")).replace(",", ",\n             "),
-                dur=dur,
-                ts=d.get("Timestamp", ""),
-                Usr=d.get("Usr", ""),
-                ConnectID=d.get("ConnectID", ""),
-                Context=d.get("Context", ""),
+def _plain_context(title: str, text: str) -> list[str]:
+    lines = [title, "-" * len(title)]
+    body = normalize_context(text)
+    if body:
+        lines.append(body)
+    else:
+        lines.append("(пусто)")
+    lines.append("")
+    return lines
+
+
+def _format_culprit_text(c: CulpritAnalysis) -> list[str]:
+    lines: list[str] = []
+    lines.append(f"  Виновник connect_id={c.connect_id}")
+    lines.append("")
+
+    if c.error:
+        lines.append(f"  Ошибка: {c.error}")
+        lines.append("")
+        return lines
+
+    start = c.tx_start_boundary
+    lines.append("  Начало транзакции")
+    if start and start.timestamp:
+        lines.extend(_plain_table(["Время"], [[format_ts(start.timestamp)]]))
+        lines.append("")
+    elif c.tx_start:
+        lines.append(f"    Время: {format_ts(c.tx_start)}")
+        lines.append("")
+
+    conflict_rows = _conflict_tlock_rows(c)
+    if conflict_rows:
+        lines.append("  TLOCK с пересечением")
+        lines.extend(
+            _plain_table(
+                ["Время", "Длительность", "Тип", "Пространство", "Ресурсы"],
+                [
+                    [
+                        format_ts(r.timestamp),
+                        f"{r.duration_sec:.6f}",
+                        r.conflict_type,
+                        r.regions,
+                        r.locks,
+                    ]
+                    for r in conflict_rows
+                ],
             )
         )
+        lines.append("")
+        lines.extend(_plain_tlock_context_sections(conflict_rows))
+    elif c.big_transaction:
+        lines.append(
+            f"  TLOCK с пересечением: большая транзакция "
+            f"({len(c.big_transaction)} уник. контекстов)"
+        )
+        lines.append("")
+    else:
+        lines.append("  TLOCK с пересечением: (нет)")
+        lines.append("  Все TLOCK в транзакции")
+        if c.tx_tlocks_all:
+            lines.extend(
+                _plain_table(
+                    ["Время", "Длительность", "Пространство", "Ресурсы"],
+                    [
+                        [
+                            format_ts(r.timestamp),
+                            f"{r.duration_sec:.6f}",
+                            r.regions,
+                            r.locks,
+                        ]
+                        for r in c.tx_tlocks_all
+                    ],
+                )
+            )
+            lines.append("")
+            lines.extend(_plain_tlock_context_sections(c.tx_tlocks_all))
+        else:
+            lines.append("    (нет TLOCK в транзакции)")
+            lines.append("")
+
+    end = c.tx_end_boundary
+    dur = _tx_duration_sec(c)
+    dur_s = f"{dur:.6f}" if dur is not None else "—"
+    lines.append("  Конец транзакции")
+    if end and end.timestamp:
+        lines.extend(
+            _plain_table(
+                ["Время", "Длительность транзакции (сек)"],
+                [[format_ts(end.timestamp), dur_s]],
+            )
+        )
+    elif c.tx_end:
+        lines.append(f"    Время: {format_ts(c.tx_end)}, длительность: {dur_s} сек.")
         lines.append("")
     return lines
 
@@ -60,46 +146,32 @@ def render_text(
     parts.append("=" * 60)
 
     for idx, victim in enumerate(result.victims, 1):
-        ev = victim.event
         parts.append("")
-        parts.append(f"--- Жертва #{idx} ---")
-        parts.append(f"Время: {format_ts(ev.ts)}")
-        if ev.log_id:
-            parts.append(f"log_id: {ev.log_id}")
-        parts.append(f"Соединение: {ev.connect_id}")
-        parts.append(f"Ждали: {ev.wait_connections}")
-        parts.append(f"Пользователь: {ev.user}")
-        parts.append(f"Хост: {ev.host}")
-        parts.append(f"База: {ev.process_name}")
-        parts.append(f"Длительность(сек): {ev.duration_sec:.6f}")
-        parts.append(f"Пространство: {ev.regions}")
-        parts.append(f"Блокировка: {ev.locks}")
-        parts.append(f"Контекст: {ev.context[:500]}{'...' if len(ev.context) > 500 else ''}")
+        parts.append(f"--- Событие #{idx} ---")
+        parts.append("")
+        parts.append("Жертва")
+        parts.extend(
+            _plain_table(
+                [
+                    "Соединение",
+                    "Время",
+                    "Длительность",
+                    "Виновник",
+                    "Регион",
+                    "Locks",
+                ],
+                _victim_table_rows(victim),
+            )
+        )
+        parts.append("")
+        parts.extend(_plain_context("Контекст жертвы", victim.event.context))
 
         if victim.parse_error:
             parts.append(f"Ошибка: {victim.parse_error}")
             continue
 
         for c in victim.culprits:
-            parts.append("")
-            parts.append(f"  Виновник connect_id={c.connect_id}")
-            parts.append(f"  Транзакция: {_tx_interval(c)}")
-            if c.error:
-                parts.append(f"  Ошибка: {c.error}")
-                continue
-            if c.full_match:
-                parts.extend(_format_conflict_block(SECTION_FULL, c.full_match))
-            if c.escalation:
-                parts.extend(_format_conflict_block(SECTION_ESC, c.escalation))
-            if c.different_dimensions:
-                parts.extend(_format_conflict_block(SECTION_DIFF, c.different_dimensions))
-            if c.big_transaction:
-                parts.extend(_format_conflict_block(SECTION_BIG, c.big_transaction))
-            if c.transaction_events and not (
-                c.full_match or c.escalation or c.different_dimensions or c.big_transaction
-            ):
-                parts.append("  События транзакции (конфликт не классифицирован):")
-                parts.append(c.transaction_events[:2000])
+            parts.extend(_format_culprit_text(c))
 
     if result.errors:
         parts.append("")
