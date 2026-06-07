@@ -1,5 +1,5 @@
 [project]
-name = "1c-tj-analyzers"
+name = "1c-tj-analyzer"
 version = "0.2.0"
 description = "Analyze 1C TLOCK, TTIMEOUT, TDEADLOCK, and CALL tech journal events"
 readme = "README.md"
