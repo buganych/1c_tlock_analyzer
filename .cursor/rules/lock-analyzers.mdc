@@ -1,5 +1,5 @@
 ---
-description: Маршрутизация задач по анализу блокировок 1С — все проблемы (tj_analyzer) или по типу (tlock/ttimeout/tdeadlock)
+description: Маршрутизация анализаторов 1С ТЖ — блокировки (tj/tlock/ttimeout/tdeadlock), CALL (call_analyzer), logcfg
 alwaysApply: true
 ---
 
@@ -19,8 +19,11 @@ alwaysApply: true
 | Только **взаимоблокировки TDEADLOCK** | `python -m tdeadlock_analyzer` | TDEADLOCK, deadlock, DeadlockConnectionIntersections, цикл, граф дедлока |
 | **Подмножество** типов | `python -m tj_analyzer --only ...` | «только tlock и дедлок», «без таймаутов» |
 | **Настройка ТЖ (logcfg)** по TLOCK | `python -m tlock_logcfg` | logcfg, настройка ТЖ, regions для мониторинга, `logcfg_шаблон.xml` |
+| **Анализ CALL** (не блокировки) | `python -m call_analyzer` | CALL, длительность, CPU, память, диск, InBytes, OutBytes, топ по контекстам |
 
-Если сомневаешься и запрос общий («разбери блокировки в ТЖ», «найди проблемы») — используй **`tj_analyzer`**.
+Если сомневаешься и запрос общий («разбери блокировки в ТЖ», «найди проблемы блокировок») — используй **`tj_analyzer`**.
+
+Если запрос про **производительность CALL**, а не блокировки — **`call_analyzer`**, см. [call-analyzer.mdc](call-analyzer.mdc).
 
 Если нужен **конфиг сбора ТЖ**, а не анализ виновников — **`tlock_logcfg`**, см. [tlock-logcfg.mdc](tlock-logcfg.mdc).
 
@@ -40,6 +43,9 @@ alwaysApply: true
 **Настройка ТЖ:**
 - «Собери logcfg» / «настройка ТЖ по regions» / «мониторинг блокировок» → `tlock_logcfg`
 
+**CALL (производительность):**
+- «Топ по CALL» / «длительность и CPU по контекстам» / «нагрузка на диск» → `call_analyzer`
+
 ## Общие параметры CLI
 
 | Параметр | Назначение |
@@ -55,6 +61,8 @@ alwaysApply: true
 | `--output both` | JSON + текст в stdout (если `--report-dir` не задан) |
 | `--file` + `--base-date` | Файл plain/json вместо CH |
 | `--config-catalog` | Выгрузка конфигурации 1С (TDEADLOCK: дерево контекста) |
+
+Параметры **`call_analyzer`** (дополнительно): `--top` (видимых строк), `--chunk-size`, `--parallel-workers`, `--min-duration` (мин. CALL, сек). См. [call-analyzer.mdc](call-analyzer.mdc).
 
 ClickHouse: `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE` — см. `.cursor/mcp.json`.
 
@@ -75,6 +83,9 @@ python -m tlock_analyzer --source click --log-id <LOG_ID> --report-dir reports
 python -m ttimeout_analyzer --source click --log-id <LOG_ID> --report-dir reports
 python -m tdeadlock_analyzer --source click --log-id <LOG_ID> --report-dir reports
 
+# CALL: топ по длительности, CPU, памяти, диску
+python -m call_analyzer --source click --log-id <LOG_ID> --report-dir reports
+
 # Настройка ТЖ по наблюдаемым TLOCK (не отчёт анализа)
 python -m tlock_logcfg --source click --log-id <LOG_ID> \
   --location-path "D:\TJ\locks" -o reports/<LOG_ID>_logcfg.xml
@@ -87,6 +98,7 @@ python -m tlock_logcfg --source click --log-id <LOG_ID> \
 | TLOCK | `tj_tlock` | `tj_tlock` | `tj_sdbl` / `tj_raw` |
 | TTIMEOUT | `tj_ttimeout` | `tj_tlock` | `tj_sdbl` / `tj_raw` |
 | TDEADLOCK | `tj_tdeadlock` | `tj_tlock` | `tj_sdbl` / `tj_raw` |
+| CALL | `tj_call` | — | — |
 
 ## Справка по log_id
 
@@ -94,6 +106,7 @@ python -m tlock_logcfg --source click --log-id <LOG_ID> \
 SELECT DISTINCT log_id FROM onec_logs.tj_tlock WHERE wait_connections != '';
 SELECT DISTINCT log_id FROM onec_logs.tj_ttimeout WHERE wait_connections != '';
 SELECT count() FROM onec_logs.tj_tdeadlock WHERE log_id = '<LOG_ID>';
+SELECT count() FROM onec_logs.tj_call WHERE log_id = '<LOG_ID>';
 ```
 
 ## Детальные правила по типу
@@ -103,6 +116,7 @@ SELECT count() FROM onec_logs.tj_tdeadlock WHERE log_id = '<LOG_ID>';
 - TTIMEOUT: [.cursor/rules/ttimeout-analyzer.mdc](ttimeout-analyzer.mdc)
 - TDEADLOCK: [.cursor/rules/tdeadlock-analyzer.mdc](tdeadlock-analyzer.mdc)
 - Настройка ТЖ (logcfg): [.cursor/rules/tlock-logcfg.mdc](tlock-logcfg.mdc)
+- CALL: [.cursor/rules/call-analyzer.mdc](call-analyzer.mdc)
 - Отчёты JSON/MD/HTML: [.cursor/rules/report-output.mdc](report-output.mdc)
 
 Подробности: [README.md](README.md), [AGENTS.md](AGENTS.md).

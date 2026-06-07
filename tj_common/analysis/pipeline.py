@@ -12,12 +12,17 @@ from tj_common.analysis.locks import (
     locks_conflict,
     parse_lock_properties,
 )
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from tj_common.analysis.progress import (
     AnalysisProgress,
     ProgressTracker,
+    ThreadSafeProgressTracker,
     iter_batches,
     should_report_progress,
+    should_use_parallel_agents,
 )
+from tj_common.sources.clickhouse import ClickHouseSource
 from tj_common.models import (
     AnalysisResult,
     CulpritAnalysis,
@@ -320,6 +325,81 @@ def _process_victim(
             tracker.tick(error=True)
 
 
+def _worker_source(source: LogSource) -> LogSource:
+    if isinstance(source, ClickHouseSource):
+        return source.clone()
+    return source
+
+
+def _merge_analysis_results(target: AnalysisResult, chunk: AnalysisResult) -> None:
+    target.victims.extend(chunk.victims)
+    target.errors.extend(chunk.errors)
+    target.unresolved.extend(chunk.unresolved)
+
+
+def _analyze_victim_chunk(
+    source: LogSource,
+    victims: list[TjEvent],
+    hosts: list[str] | None,
+    tracker: ThreadSafeProgressTracker | None,
+) -> AnalysisResult:
+    worker = _worker_source(source)
+    result = AnalysisResult()
+    for victim in victims:
+        _process_victim(worker, victim, result, hosts, tracker)
+    return result
+
+
+def _run_analysis_parallel(
+    source: LogSource,
+    victims: list[TjEvent],
+    filters: QueryFilters,
+    progress: AnalysisProgress,
+) -> AnalysisResult:
+    chunks = list(iter_batches(victims, progress.agent_chunk_size))
+    result = AnalysisResult()
+    tracker: ThreadSafeProgressTracker | None = None
+    if should_report_progress(len(victims), progress):
+        tracker = ThreadSafeProgressTracker(
+            ProgressTracker(
+                len(victims),
+                label=progress.label,
+                status_interval_sec=progress.status_interval_sec,
+                emit=progress.emit,
+            )
+        )
+        if progress.emit:
+            progress.emit(
+                f"[{progress.label}] параллельный разбор: "
+                f"{len(chunks)} агент(ов) по {progress.agent_chunk_size} проблем"
+            )
+
+    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+        futures = {}
+        for agent_idx, chunk in enumerate(chunks, 1):
+            if progress.emit:
+                progress.emit(
+                    f"[{progress.label}] агент {agent_idx}/{len(chunks)}: "
+                    f"разбор {len(chunk)} проблем"
+                )
+            futures[
+                pool.submit(
+                    _analyze_victim_chunk,
+                    source,
+                    chunk,
+                    filters.hosts,
+                    tracker,
+                )
+            ] = agent_idx
+
+        for future in as_completed(futures):
+            _merge_analysis_results(result, future.result())
+
+    if tracker:
+        tracker.finish()
+    return result
+
+
 def run_analysis(
     source: LogSource,
     filters: QueryFilters,
@@ -330,6 +410,10 @@ def run_analysis(
     result = AnalysisResult()
     if not victims:
         return result
+
+    if should_use_parallel_agents(len(victims), progress):
+        assert progress is not None
+        return _run_analysis_parallel(source, victims, filters, progress)
 
     tracker: ProgressTracker | None = None
     batch_size = len(victims)

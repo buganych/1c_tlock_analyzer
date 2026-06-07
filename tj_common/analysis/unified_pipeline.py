@@ -112,5 +112,6 @@ def _child_progress(
         batch_size=parent.batch_size,
         status_interval_sec=parent.status_interval_sec,
         min_items=parent.min_items,
+        agent_chunk_size=parent.agent_chunk_size,
         emit=parent.emit,
     )

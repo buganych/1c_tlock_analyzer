@@ -7,7 +7,7 @@ alwaysApply: true
 
 **Маршрутизация анализаторов:** [.cursor/rules/lock-analyzers.mdc](lock-analyzers.mdc)
 
-При **любом** запуске анализа блокировок (TLOCK / TTIMEOUT / TDEADLOCK / сводный `tj_analyzer`) **обязательно** указывай `--report-dir`.
+При **любом** запуске анализа (блокировки: TLOCK / TTIMEOUT / TDEADLOCK / `tj_analyzer`; **CALL:** `call_analyzer`) **обязательно** указывай `--report-dir`.
 
 ## Что создаётся
 
@@ -17,7 +17,7 @@ alwaysApply: true
 |------|--------|
 | `analysis.json` | машиночитаемый результат |
 | `analysis.md` | отчёт для чтения в редакторе |
-| `analysis.html` | отчёт с оглавлением и раскрываемым контекстом |
+| `analysis.html` | отчёт с оглавлением; для CALL — фильтр, сортировка по колонкам |
 | `logcfg.xml` | настройка ТЖ по regions **неразобранных** TLOCK (только если анализ не смог разобрать часть блокировок) |
 
 Каталог `reports/` в `.gitignore` — не коммить отчёты.
@@ -41,8 +41,10 @@ python -m tj_analyzer --source click --log-id <LOG_ID> --database <IB> \
 python -m tlock_analyzer --source click --log-id <LOG_ID> --report-dir reports
 python -m ttimeout_analyzer --source click --log-id <LOG_ID> --report-dir reports
 python -m tdeadlock_analyzer --source click --log-id <LOG_ID> --report-dir reports
+python -m call_analyzer --source click --log-id <LOG_ID> --report-dir reports
 
 # Файл ТЖ вместо ClickHouse
+python -m call_analyzer --source plain --file <path> --base-date "..." --report-dir reports
 python -m tj_analyzer --source plain --file <path> --base-date "..." --report-dir reports
 ```
 

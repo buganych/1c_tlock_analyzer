@@ -1,0 +1,61 @@
+---
+description: Анализ CALL (длительность, CPU, память, диск). Не использовать для блокировок — см. tj_analyzer / tlock_analyzer.
+alwaysApply: true
+---
+
+# call_analyzer — события CALL
+
+**Маршрутизация:** [.cursor/rules/lock-analyzers.mdc](lock-analyzers.mdc)
+
+## Когда использовать
+
+Ключевые слова: **CALL**, длительность вызовов, CPU, память, диск, InBytes, OutBytes, MemoryPeak, CPUTime, «топ по CALL», «нагрузка по контекстам».
+
+**Не** использовать для TLOCK / TTIMEOUT / TDEADLOCK — тогда **`python -m tj_analyzer`** или отдельные lock-анализаторы.
+
+## Команда
+
+```bash
+python -m call_analyzer --source click --log-id <LOG_ID> --report-dir reports
+```
+
+## Логика
+
+- Источник: `onec_logs.tj_call` (не `tj_scall`, не `tj_raw`)
+- Группировка по контексту (каскад: `context` → `module.method` → `func` → `mname.iname`)
+- Агрегация в SQL (ClickHouse) или Python (файл); при большом объёме — порции и параллельные агенты
+- Отчёт: 6 таблиц (длительность, CPU, память, диск всего / пишущая / читающая)
+
+## Параметры CLI
+
+| Параметр | Назначение |
+|----------|------------|
+| `--log-id` | Обязателен для `--source click` |
+| `--from` / `--to` | Период |
+| `--database` | `process_name` |
+| `--hosts` | `computer_name` |
+| `--file-like` | `file LIKE` (click) |
+| `--min-duration` | Мин. длительность CALL, сек |
+| `--top` | Видимых строк в таблице (остальные — сворачиваемый блок), по умолчанию **20** |
+| `--chunk-size` | Событий на порцию (параллельная обработка), по умолчанию **50000** |
+| `--parallel-workers` | Параллельных агентов, по умолчанию **4** |
+| `--report-dir` | **Обязательно** — см. [report-output.mdc](report-output.mdc) |
+
+## Единицы в отчёте (целые числа)
+
+| Метрика | Единица |
+|---------|---------|
+| Длительность | сек |
+| CPU | сек |
+| Память | МБ |
+| Диск (3 таблицы) | МБ |
+
+Колонки: контекст, средняя, максимальная, минимальная, **всего**, кол-во.
+
+**HTML:** сортировка по любой колонке, общий фильтр по подстроке контекста.
+
+```sql
+SELECT count() FROM onec_logs.tj_call WHERE log_id = '<LOG_ID>';
+```
+
+Skill: [.cursor/skills/call-analyzer/SKILL.md](../skills/call-analyzer/SKILL.md)

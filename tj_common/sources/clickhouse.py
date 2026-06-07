@@ -58,6 +58,11 @@ class ClickHouseSource(LogSource):
         self.database = database
         self.victim_table = victim_table
         self.victim_event = victim_event
+        self._connect_host = host
+        self._connect_port = port
+        self._connect_username = username
+        self._connect_password = password
+        self._connect_secure = secure
         self.client = clickhouse_connect.get_client(
             host=host,
             port=port,
@@ -448,3 +453,16 @@ class ClickHouseSource(LogSource):
         if rows and rows[0].get("context"):
             return str(rows[0]["context"])
         return self.fetch_context(connect_id, at_ts, log_id=log_id, hosts=hosts)
+
+    def clone(self) -> ClickHouseSource:
+        """Independent connection for parallel agent workers."""
+        return ClickHouseSource(
+            host=self._connect_host,
+            port=self._connect_port,
+            username=self._connect_username,
+            password=self._connect_password,
+            database=self.database,
+            secure=self._connect_secure,
+            victim_table=self.victim_table,
+            victim_event=self.victim_event,
+        )

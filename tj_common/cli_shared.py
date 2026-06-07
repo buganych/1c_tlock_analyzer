@@ -44,11 +44,17 @@ class OutputType(str, Enum):
     both = "both"
 
 
-def make_analysis_progress(console, label: str) -> AnalysisProgress:
-    """Progress reporter: status every 10s for batches of 50 victims."""
+def make_analysis_progress(
+    console,
+    label: str,
+    *,
+    agent_chunk_size: int = 1000,
+) -> AnalysisProgress:
+    """Progress every 10s; parallel agents when victims exceed agent_chunk_size."""
     return AnalysisProgress(
         label=label,
         emit=lambda msg: console.print(f"[cyan]{msg}[/cyan]"),
+        agent_chunk_size=agent_chunk_size,
     )
 
 

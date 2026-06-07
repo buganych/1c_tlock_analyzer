@@ -14,13 +14,32 @@ EmitFn = Callable[[str], None]
 
 @dataclass
 class AnalysisProgress:
-    """Options for sequential batch processing with periodic status."""
+    """Options for batch processing with periodic status and optional parallel agents."""
 
     label: str = "Анализ"
     batch_size: int = 50
     status_interval_sec: float = 10.0
     min_items: int = 10
+    agent_chunk_size: int = 0
     emit: EmitFn | None = None
+
+
+class ThreadSafeProgressTracker:
+    """Wrap ProgressTracker for concurrent agent workers."""
+
+    def __init__(self, tracker: ProgressTracker) -> None:
+        import threading
+
+        self._tracker = tracker
+        self._lock = threading.Lock()
+
+    def tick(self, *, error: bool = False) -> None:
+        with self._lock:
+            self._tracker.tick(error=error)
+
+    def finish(self) -> None:
+        with self._lock:
+            self._tracker.finish()
 
 
 class ProgressTracker:
@@ -72,3 +91,13 @@ def iter_batches(items: list[T], batch_size: int) -> Iterator[list[T]]:
 
 def should_report_progress(total: int, progress: AnalysisProgress | None) -> bool:
     return progress is not None and total >= progress.min_items
+
+
+def should_use_parallel_agents(
+    total: int, progress: AnalysisProgress | None
+) -> bool:
+    return (
+        progress is not None
+        and progress.agent_chunk_size > 0
+        and total > progress.agent_chunk_size
+    )

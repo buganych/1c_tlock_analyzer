@@ -1,7 +1,7 @@
 [project]
 name = "1c-tj-analyzers"
 version = "0.2.0"
-description = "Analyze 1C TLOCK, TTIMEOUT, and TDEADLOCK tech journal events"
+description = "Analyze 1C TLOCK, TTIMEOUT, TDEADLOCK, and CALL tech journal events"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,6 +20,7 @@ ttimeout-analyzer = "ttimeout_analyzer.cli:app_entry"
 tdeadlock-analyzer = "tdeadlock_analyzer.cli:app_entry"
 tj-analyzer = "tj_analyzer.cli:app_entry"
 tlock-logcfg = "tlock_logcfg.cli:app_entry"
+call-analyzer = "call_analyzer.cli:app_entry"
 
 
 [build-system]
@@ -27,7 +28,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["tj_common", "tlock_analyzer", "ttimeout_analyzer", "tdeadlock_analyzer", "tj_analyzer", "tlock_logcfg"]
+packages = ["tj_common", "tlock_analyzer", "ttimeout_analyzer", "tdeadlock_analyzer", "tj_analyzer", "tlock_logcfg", "call_analyzer"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

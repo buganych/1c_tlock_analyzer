@@ -65,6 +65,11 @@ def main(
     min_duration: float = typer.Option(
         0.0, "--min-duration", help="Min wait duration (TLOCK/TTIMEOUT), seconds"
     ),
+    agent_chunk_size: int = typer.Option(
+        1000,
+        "--agent-chunk-size",
+        help="Victims per parallel agent (0 = sequential only)",
+    ),
     hosts: Optional[str] = typer.Option(None, help="Comma-separated hosts"),
     database: Optional[str] = typer.Option(
         None, "--database", help="ProcessName filter (AND with log_id)"
@@ -174,7 +179,9 @@ def main(
         ttimeout_filters=ttimeout_filters if AnalyzerKind.ttimeout in kinds else None,
         tdeadlock_filters=tdeadlock_filters if AnalyzerKind.tdeadlock in kinds else None,
         config_catalog=config_catalog,
-        progress=make_analysis_progress(console, "tj_analyzer"),
+        progress=make_analysis_progress(
+            console, "tj_analyzer", agent_chunk_size=agent_chunk_size
+        ),
     )
 
     s = result.summary
